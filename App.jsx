@@ -1,15 +1,15 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import QUESTIONS from "./data.js";
 
 const PAGE_SIZE = 20;
 const TOTAL_PAGES = Math.ceil(QUESTIONS.length / PAGE_SIZE);
 
 // ─── Option ──────────────────────────────────────────────────────────────────
-function Option({ letter, text, status, onClick }) {
+function Option({ letter, text, status, onClick, onDoubleClick }) {
   const styles = {
     idle:     "border-gray-200 bg-white hover:border-blue-400 hover:bg-blue-50 cursor-pointer",
-    correct:  "border-green-500 bg-green-50 cursor-default",
-    wrong:    "border-red-400   bg-red-50   cursor-default",
+    correct:  "border-green-500 bg-green-50 cursor-pointer",
+    wrong:    "border-red-400   bg-red-50   cursor-pointer",
     reveal:   "border-green-500 bg-green-50 cursor-default",
     disabled: "border-gray-100 bg-gray-50   cursor-default opacity-50",
   };
@@ -21,6 +21,7 @@ function Option({ letter, text, status, onClick }) {
     <div
       className={`flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border-2 text-sm leading-relaxed transition-all select-none ${styles[status]}`}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
     >
       <span className={`font-bold min-w-[18px] mt-0.5 ${keyColor[status]}`}>{letter}.</span>
       <span>{text}</span>
@@ -29,7 +30,7 @@ function Option({ letter, text, status, onClick }) {
 }
 
 // ─── Question Card ────────────────────────────────────────────────────────────
-function QuestionCard({ q, ans, onChoose }) {
+function QuestionCard({ q, ans, onChoose, onUndo, showUndoHint }) {
   const chosen   = ans?.chosen;
   const revealed = ans?.revealed;
   const done     = chosen || revealed;
@@ -74,29 +75,90 @@ function QuestionCard({ q, ans, onChoose }) {
             letter={key}
             text={q[key]}
             status={optStatus(key)}
-            onClick={() => !done && onChoose(q.num, key)}
+            onClick={() => !revealed && (done ? undefined : onChoose(q.num, key))}
+            onDoubleClick={() => !revealed && done && onUndo(q.num)}
           />
         ))}
       </div>
 
-      {/* Feedback */}
-      {done && (
-        <div className={`px-4 pb-3 text-sm font-semibold ${
-          revealed ? "text-amber-600" : correct ? "text-green-600" : "text-red-500"
-        }`}>
-          {revealed
-            ? `Answer revealed: ${q.ans}`
-            : correct
-            ? "✓ Correct!"
-            : `✗ Wrong — correct answer: ${q.ans}`}
+      {/* Feedback row */}
+      {done && !revealed && (
+        <div className="px-4 pb-3 flex items-center justify-between gap-2">
+          <span className={`text-sm font-semibold ${correct ? "text-green-600" : "text-red-500"}`}>
+            {correct ? "✓ Correct!" : `✗ Wrong — correct answer: ${q.ans}`}
+          </span>
+          {!revealed && (
+            <button
+              onClick={() => onUndo(q.num)}
+              className="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2 whitespace-nowrap"
+            >
+              undo
+            </button>
+          )}
+        </div>
+      )}
+      {revealed && (
+        <div className="px-4 pb-3 text-sm font-semibold text-amber-600">
+          Answer revealed: {q.ans}
+        </div>
+      )}
+
+      {/* Double-click hint (shows briefly after first answer) */}
+      {showUndoHint && done && !revealed && (
+        <div className="px-4 pb-2 text-xs text-gray-400 italic">
+          Double-click your answer to undo
         </div>
       )}
     </div>
   );
 }
 
+// ─── Wrong Answers Review Modal ───────────────────────────────────────────────
+function WrongReviewModal({ wrongQs, answers, onClose, onUndo, onChoose }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 overflow-y-auto">
+      <div className="max-w-2xl mx-auto px-4 py-8">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <h2 className="text-xl font-bold text-white">Review Wrong Answers</h2>
+            <p className="text-white/70 text-sm mt-0.5">{wrongQs.length} question{wrongQs.length !== 1 ? "s" : ""} to review</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="bg-white/20 hover:bg-white/30 text-white rounded-xl px-4 py-2 font-semibold text-sm transition-colors"
+          >
+            ✕ Close
+          </button>
+        </div>
+
+        {wrongQs.length === 0 ? (
+          <div className="bg-white rounded-2xl p-10 text-center">
+            <div className="text-5xl mb-3">🎉</div>
+            <h3 className="text-lg font-bold text-gray-700">No wrong answers!</h3>
+            <p className="text-gray-400 text-sm mt-1">You got everything right.</p>
+          </div>
+        ) : (
+          <div className="grid gap-4">
+            {wrongQs.map(q => (
+              <QuestionCard
+                key={q.num}
+                q={q}
+                ans={answers[q.num]}
+                onChoose={onChoose}
+                onUndo={onUndo}
+                showUndoHint={false}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Confirm Modal ────────────────────────────────────────────────────────────
-function Modal({ open, title, body, confirmLabel, danger, onConfirm, onClose }) {
+function ConfirmModal({ open, title, body, confirmLabel, danger, onConfirm, onClose }) {
   if (!open) return null;
   return (
     <div
@@ -129,9 +191,11 @@ function Modal({ open, title, body, confirmLabel, danger, onConfirm, onClose }) 
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [page, setPage]       = useState(0);
-  const [answers, setAnswers] = useState({});
-  const [modal, setModal]     = useState(null); // null | { scope: 'set' | 'all' }
+  const [page, setPage]           = useState(0);
+  const [answers, setAnswers]     = useState({});
+  const [modal, setModal]         = useState(null);       // null | { scope: 'set'|'all' }
+  const [showWrong, setShowWrong] = useState(false);
+  const [showUndoHint, setShowUndoHint] = useState(true); // show hint after first answer
 
   const pageQs = useMemo(
     () => QUESTIONS.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
@@ -140,14 +204,36 @@ export default function App() {
 
   const stats = useMemo(() => {
     const correct    = QUESTIONS.filter(q => answers[q.num]?.chosen === q.ans).length;
+    const wrong      = QUESTIONS.filter(q => answers[q.num]?.chosen && answers[q.num]?.chosen !== q.ans).length;
     const done       = QUESTIONS.filter(q => answers[q.num]?.chosen || answers[q.num]?.revealed).length;
     const setCorrect = pageQs.filter(q => answers[q.num]?.chosen === q.ans).length;
     const setDone    = pageQs.filter(q => answers[q.num]?.chosen || answers[q.num]?.revealed).length;
-    return { correct, done, setCorrect, setDone };
+    return { correct, wrong, done, setCorrect, setDone };
   }, [answers, pageQs]);
 
+  // Questions answered wrong (not revealed)
+  const wrongQuestions = useMemo(
+    () => QUESTIONS.filter(q => answers[q.num]?.chosen && answers[q.num]?.chosen !== q.ans),
+    [answers]
+  );
+
   const choose = useCallback((qnum, key) => {
-    setAnswers(prev => ({ ...prev, [qnum]: { chosen: key } }));
+    setAnswers(prev => {
+      if (prev[qnum]?.chosen || prev[qnum]?.revealed) return prev;
+      return { ...prev, [qnum]: { chosen: key } };
+    });
+    // Hide the hint after a few seconds on first use
+    setTimeout(() => setShowUndoHint(false), 5000);
+  }, []);
+
+  // Double-click or undo button — clears the answer for that question
+  const undoAnswer = useCallback((qnum) => {
+    setAnswers(prev => {
+      if (prev[qnum]?.revealed) return prev; // can't undo revealed
+      const next = { ...prev };
+      delete next[qnum];
+      return next;
+    });
   }, []);
 
   const revealSet = useCallback(() => {
@@ -177,7 +263,6 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Dot color for each set button
   function dotClass(p) {
     const qs   = QUESTIONS.slice(p * PAGE_SIZE, (p + 1) * PAGE_SIZE);
     const done = qs.filter(q => answers[q.num]?.chosen || answers[q.num]?.revealed).length;
@@ -200,6 +285,15 @@ export default function App() {
             <span className="bg-white/20 rounded-full px-3 py-1 text-xs font-semibold whitespace-nowrap">
               {stats.correct} correct · {stats.done} answered
             </span>
+            {/* Wrong answers review button — only show when there are wrong answers */}
+            {stats.wrong > 0 && (
+              <button
+                onClick={() => setShowWrong(true)}
+                className="bg-red-500 hover:bg-red-600 text-white rounded-lg px-3 py-1.5 text-xs font-bold transition-colors whitespace-nowrap"
+              >
+                ✗ Review {stats.wrong} Wrong
+              </button>
+            )}
             <button
               onClick={revealSet}
               className="bg-white text-blue-700 rounded-lg px-3 py-1.5 text-xs font-bold hover:bg-blue-50 transition-colors whitespace-nowrap"
@@ -271,12 +365,26 @@ export default function App() {
             {stats.setCorrect} / {pageQs.length}
           </span>
         </div>
+
+        {/* Undo hint banner */}
+        {showUndoHint && stats.done > 0 && (
+          <div className="mt-2 text-xs text-gray-400 text-center italic">
+            💡 Double-click your answer (or tap "undo") to cancel a selection
+          </div>
+        )}
       </div>
 
       {/* ── Question cards ── */}
       <div className="max-w-3xl mx-auto px-4 pt-4 pb-6 grid gap-4">
         {pageQs.map(q => (
-          <QuestionCard key={q.num} q={q} ans={answers[q.num]} onChoose={choose} />
+          <QuestionCard
+            key={q.num}
+            q={q}
+            ans={answers[q.num]}
+            onChoose={choose}
+            onUndo={undoAnswer}
+            showUndoHint={showUndoHint}
+          />
         ))}
       </div>
 
@@ -288,10 +396,18 @@ export default function App() {
               {pct >= 80 ? "🎉 You Passed!" : "📝 Test Complete"} {pct}%
             </h2>
             <p className="opacity-90 mb-5">
-              {stats.correct} correct out of 200.{" "}
+              {stats.correct} correct, {stats.wrong} wrong out of 200.{" "}
               {pct >= 80 ? "Great job!" : "Keep practising — 80% needed to pass."}
             </p>
             <div className="flex gap-3 justify-center flex-wrap">
+              {stats.wrong > 0 && (
+                <button
+                  onClick={() => setShowWrong(true)}
+                  className="bg-red-400 hover:bg-red-500 text-white rounded-xl px-5 py-2 font-bold text-sm"
+                >
+                  Review {stats.wrong} Wrong
+                </button>
+              )}
               <button
                 onClick={() => setModal({ scope: "set" })}
                 className="bg-white text-blue-700 rounded-xl px-5 py-2 font-bold text-sm"
@@ -330,8 +446,19 @@ export default function App() {
         </button>
       </div>
 
+      {/* ── Wrong answers review overlay ── */}
+      {showWrong && (
+        <WrongReviewModal
+          wrongQs={wrongQuestions}
+          answers={answers}
+          onClose={() => setShowWrong(false)}
+          onUndo={undoAnswer}
+          onChoose={choose}
+        />
+      )}
+
       {/* ── Confirm modal ── */}
-      <Modal
+      <ConfirmModal
         open={!!modal}
         title={modal?.scope === "all" ? "Reset all 200 questions?" : "Reset this set?"}
         body={
