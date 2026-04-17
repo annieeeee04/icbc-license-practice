@@ -1,1 +1,26 @@
+# OS
 .DS_Store
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist2/
+dist_verify/
+build/
+
+# Vite temp files
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
